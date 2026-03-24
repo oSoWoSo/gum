@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/paginator"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -87,50 +87,56 @@ func generateRandomMessagesWithDelimiter(count int, delimiter string) []string {
 
 func TestParsePanelsFromArgs(t *testing.T) {
 	tests := map[string]struct {
-		args    []string
-		want    []Panel
-		wantErr bool
+		args      []string
+		wantLen   int
+		wantTypes []PanelType
+		wantErr   bool
 	}{
 		"single choose panel": {
-			args: []string{"choose", "a", "b", "c"},
-			want: []Panel{
-				{Type: PanelChoose, Items: []string{"a", "b", "c"}},
-			},
+			args:      []string{"choose", "a", "b", "c"},
+			wantLen:   1,
+			wantTypes: []PanelType{PanelChoose},
 		},
 		"single filter panel": {
-			args: []string{"filter", "one", "two", "three"},
-			want: []Panel{
-				{Type: PanelFilter, Items: []string{"one", "two", "three"}},
-			},
+			args:      []string{"filter", "one", "two", "three"},
+			wantLen:   1,
+			wantTypes: []PanelType{PanelFilter},
 		},
-		"multiple panels": {
-			args: []string{"choose", "a", "b", "c", "filter", "x", "y", "z"},
-			want: []Panel{
-				{Type: PanelChoose, Items: []string{"a", "b", "c"}},
-				{Type: PanelFilter, Items: []string{"x", "y", "z"}},
-			},
+		"two panels with -- separator": {
+			args:      []string{"choose", "a", "b", "c", "--", "filter", "x", "y", "z"},
+			wantLen:   2,
+			wantTypes: []PanelType{PanelChoose, PanelFilter},
 		},
 		"three panels": {
-			args: []string{"choose", "a", "b", "filter", "c", "d", "choose", "e", "f"},
-			want: []Panel{
-				{Type: PanelChoose, Items: []string{"a", "b"}},
-				{Type: PanelFilter, Items: []string{"c", "d"}},
-				{Type: PanelChoose, Items: []string{"e", "f"}},
-			},
+			args:      []string{"choose", "a", "b", "--", "filter", "c", "d", "--", "choose", "e", "f"},
+			wantLen:   3,
+			wantTypes: []PanelType{PanelChoose, PanelFilter, PanelChoose},
 		},
-		"empty items": {
+		"choose with flags": {
+			args:      []string{"choose", "--limit", "3", "--header", "Ovoce", "a", "b", "c"},
+			wantLen:   1,
+			wantTypes: []PanelType{PanelChoose},
+		},
+		"filter with flags and -- separator": {
+			args:      []string{"choose", "a", "b", "--", "filter", "--no-fuzzy", "--placeholder", "Hledat", "x", "y"},
+			wantLen:   2,
+			wantTypes: []PanelType{PanelChoose, PanelFilter},
+		},
+		"case insensitive type": {
+			args:      []string{"CHOOSE", "a", "b", "--", "FILTER", "c", "d"},
+			wantLen:   2,
+			wantTypes: []PanelType{PanelChoose, PanelFilter},
+		},
+		"empty panel block returns error": {
 			args:    []string{"choose"},
 			wantErr: true,
 		},
-		"case insensitive type": {
-			args: []string{"CHOOSE", "a", "b", "FILTER", "c", "d"},
-			want: []Panel{
-				{Type: PanelChoose, Items: []string{"a", "b"}},
-				{Type: PanelFilter, Items: []string{"c", "d"}},
-			},
-		},
-		"empty args": {
+		"empty args returns error": {
 			args:    []string{},
+			wantErr: true,
+		},
+		"unknown type returns error": {
+			args:    []string{"unknown", "a", "b"},
 			wantErr: true,
 		},
 	}
@@ -142,16 +148,16 @@ func TestParsePanelsFromArgs(t *testing.T) {
 				t.Errorf("parsePanelsFromArgs() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !tt.wantErr && len(got) != len(tt.want) {
-				t.Errorf("parsePanelsFromArgs() returned %d panels, want %d", len(got), len(tt.want))
+			if tt.wantErr {
 				return
 			}
-			for i := range got {
-				if got[i].Type != tt.want[i].Type {
-					t.Errorf("Panel[%d].Type = %v, want %v", i, got[i].Type, tt.want[i].Type)
-				}
-				if len(got[i].Items) != len(tt.want[i].Items) {
-					t.Errorf("Panel[%d].Items length = %d, want %d", i, len(got[i].Items), len(tt.want[i].Items))
+			if len(got) != tt.wantLen {
+				t.Errorf("parsePanelsFromArgs() returned %d panels, want %d", len(got), tt.wantLen)
+				return
+			}
+			for i, p := range got {
+				if p.Type != tt.wantTypes[i] {
+					t.Errorf("Panel[%d].Type = %v, want %v", i, p.Type, tt.wantTypes[i])
 				}
 			}
 		})
@@ -168,48 +174,42 @@ func TestPanelTypeConstants(t *testing.T) {
 }
 
 func TestInitModelsConsistency(t *testing.T) {
+	makeChoosePanel := func(items ...string) Panel {
+		opts, _ := parseChooseBlock(items)
+		return Panel{Type: PanelChoose, ChooseOpts: opts}
+	}
+	makeFilterPanel := func(items ...string) Panel {
+		opts, _ := parseFilterBlock(items)
+		return Panel{Type: PanelFilter, FilterOpts: opts}
+	}
+
 	tests := map[string]struct {
-		panels  []Panel
-		wantErr bool
+		panels    []Panel
+		wantItems []int // expected item count per panel
+		wantErr   bool
 	}{
 		"single choose panel": {
-			panels: []Panel{
-				{Type: PanelChoose, Items: []string{"a", "b", "c"}},
-			},
-			wantErr: false,
+			panels:    []Panel{makeChoosePanel("a", "b", "c")},
+			wantItems: []int{3},
 		},
 		"single filter panel": {
-			panels: []Panel{
-				{Type: PanelFilter, Items: []string{"x", "y", "z"}},
-			},
-			wantErr: false,
+			panels:    []Panel{makeFilterPanel("x", "y", "z")},
+			wantItems: []int{3},
 		},
 		"multiple panels": {
-			panels: []Panel{
-				{Type: PanelChoose, Items: []string{"a", "b"}},
-				{Type: PanelFilter, Items: []string{"x", "y"}},
-			},
-			wantErr: false,
+			panels:    []Panel{makeChoosePanel("a", "b"), makeFilterPanel("x", "y")},
+			wantItems: []int{2, 2},
 		},
 		"three panels mixed": {
-			panels: []Panel{
-				{Type: PanelChoose, Items: []string{"a"}},
-				{Type: PanelFilter, Items: []string{"b", "c"}},
-				{Type: PanelChoose, Items: []string{"d", "e", "f"}},
-			},
-			wantErr: false,
+			panels:    []Panel{makeChoosePanel("a"), makeFilterPanel("b", "c"), makeChoosePanel("d", "e", "f")},
+			wantItems: []int{1, 2, 3},
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			m := &orchestrator{
-				panels: tt.panels,
-			}
-			err := m.initModels(Options{
-				Height: 10,
-				Limit:  1,
-			})
+			m := &orchestrator{panels: tt.panels}
+			err := m.initModels(Options{Height: 10})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("initModels() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -222,14 +222,14 @@ func TestInitModelsConsistency(t *testing.T) {
 				for i, panel := range m.panels {
 					switch panel.Type {
 					case PanelChoose:
-						if len(m.chooseModels[panel.ModelIdx].items) != len(panel.Items) {
-							t.Errorf("panel %d (%s): expected %d items, got %d",
-								i, panel.Type, len(panel.Items), len(m.chooseModels[panel.ModelIdx].items))
+						got := len(m.chooseModels[panel.ModelIdx].items)
+						if got != tt.wantItems[i] {
+							t.Errorf("panel %d (choose): expected %d items, got %d", i, tt.wantItems[i], got)
 						}
 					case PanelFilter:
-						if len(m.filterModels[panel.ModelIdx].filteringChoices) != len(panel.Items) {
-							t.Errorf("panel %d (%s): expected %d items, got %d",
-								i, panel.Type, len(panel.Items), len(m.filterModels[panel.ModelIdx].filteringChoices))
+						got := len(m.filterModels[panel.ModelIdx].filteringChoices)
+						if got != tt.wantItems[i] {
+							t.Errorf("panel %d (filter): expected %d items, got %d", i, tt.wantItems[i], got)
 						}
 					}
 				}
@@ -288,16 +288,17 @@ func TestDefaultPanelKeymap(t *testing.T) {
 }
 
 func TestPanelStruct(t *testing.T) {
-	p := Panel{
-		Type:  PanelChoose,
-		Items: []string{"item1", "item2"},
+	opts, err := parseChooseBlock([]string{"item1", "item2"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
+	p := Panel{Type: PanelChoose, ChooseOpts: opts}
 
 	if p.Type != PanelChoose {
 		t.Errorf("Panel.Type = %v, want %v", p.Type, PanelChoose)
 	}
-	if len(p.Items) != 2 {
-		t.Errorf("Panel.Items length = %d, want 2", len(p.Items))
+	if len(p.ChooseOpts.Options) != 2 {
+		t.Errorf("Panel.ChooseOpts.Options length = %d, want 2", len(p.ChooseOpts.Options))
 	}
 }
 
@@ -426,7 +427,7 @@ func TestRenderChooseView_AllItems(t *testing.T) {
 			cm := newMockChooseModel(tt.items, tt.height)
 			o := orchestrator{
 				chooseModels: []chooseModel{*cm},
-				panels:       []Panel{{Type: PanelChoose, Items: tt.items}},
+				panels:       []Panel{{Type: PanelChoose, ModelIdx: 0}},
 			}
 
 			view := o.renderChooseView(cm)
@@ -472,7 +473,7 @@ func TestRenderFilterView_AllItems(t *testing.T) {
 			fm := newMockFilterModel(tt.items, tt.height, true)
 			o := orchestrator{
 				filterModels: []filterModel{*fm},
-				panels:       []Panel{{Type: PanelFilter, Items: tt.items}},
+				panels:       []Panel{{Type: PanelFilter, ModelIdx: 0}},
 			}
 
 			view := o.renderFilterView(fm)
@@ -492,8 +493,8 @@ func TestRenderFilterView_AllItems(t *testing.T) {
 
 func TestRenderMixedPanels(t *testing.T) {
 	panels := []Panel{
-		{Type: PanelChoose, Items: []string{"a", "b", "c"}},
-		{Type: PanelFilter, Items: []string{"x", "y", "z"}},
+		{Type: PanelChoose, ModelIdx: 0},
+		{Type: PanelFilter, ModelIdx: 0},
 	}
 
 	chooseItems := []chooseItem{
@@ -520,7 +521,7 @@ func TestRenderItemsWithSpaces(t *testing.T) {
 	cm := newMockChooseModel([]string{"hello world", "foo bar", "baz qux"}, 10)
 	o := orchestrator{
 		chooseModels: []chooseModel{*cm},
-		panels:       []Panel{{Type: PanelChoose, Items: []string{"hello world", "foo bar", "baz qux"}}},
+		panels:       []Panel{{Type: PanelChoose, ModelIdx: 0}},
 	}
 
 	view := o.renderChooseView(cm)
@@ -561,7 +562,7 @@ func TestRenderUnicodeItems(t *testing.T) {
 			cm := newMockChooseModel(tt.items, 10)
 			o := orchestrator{
 				chooseModels: []chooseModel{*cm},
-				panels:       []Panel{{Type: PanelChoose, Items: tt.items}},
+				panels:       []Panel{{Type: PanelChoose, ModelIdx: 0}},
 			}
 
 			view := o.renderChooseView(cm)
@@ -603,7 +604,7 @@ func TestRenderSpecialCharacterItems(t *testing.T) {
 			cm := newMockChooseModel(tt.items, 10)
 			o := orchestrator{
 				chooseModels: []chooseModel{*cm},
-				panels:       []Panel{{Type: PanelChoose, Items: tt.items}},
+				panels:       []Panel{{Type: PanelChoose, ModelIdx: 0}},
 			}
 
 			view := o.renderChooseView(cm)
@@ -677,7 +678,7 @@ func TestRenderPagination(t *testing.T) {
 	cm.paginator.Page = 1
 	o := orchestrator{
 		chooseModels: []chooseModel{*cm},
-		panels:       []Panel{{Type: PanelChoose, Items: items}},
+		panels:       []Panel{{Type: PanelChoose, ModelIdx: 0}},
 	}
 
 	view := o.renderChooseView(cm)
@@ -867,8 +868,8 @@ func TestMultipleStylesInOrchestrator(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: items, ModelIdx: 0},
-			{Type: PanelFilter, Items: items, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels:        []chooseModel{*cm},
 		filterModels:        []filterModel{*fm},
@@ -1140,18 +1141,28 @@ func TestGetResults(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: []string{"a", "b", "c"}, ModelIdx: 0},
-			{Type: PanelFilter, Items: []string{"x", "y"}, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels: []chooseModel{cm},
 		filterModels: []filterModel{fm},
 	}
 
-	results := o.getResults("\n")
+	results := o.getResults("|")
 
-	expected := []string{"a", "c", "x", "y"}
-	if len(results) != len(expected) {
-		t.Errorf("expected %d results, got %d", len(expected), len(results))
+	// getResults returns one string per panel
+	if len(results) != 2 {
+		t.Errorf("expected 2 results (one per panel), got %d: %v", len(results), results)
+		return
+	}
+	// Choose panel: a and c selected, joined by |
+	if results[0] != "a|c" {
+		t.Errorf("choose panel result = %q, want 'a|c'", results[0])
+	}
+	// Filter panel: x and y selected (order may vary), joined by |
+	parts := strings.Split(results[1], "|")
+	if len(parts) != 2 {
+		t.Errorf("filter panel result = %q, expected 2 items joined by |", results[1])
 	}
 }
 
@@ -1191,8 +1202,8 @@ func TestHandleSubmit_FilterWithFilteredMatches(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: []string{"a", "b", "c"}, ModelIdx: 0},
-			{Type: PanelFilter, Items: items, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels: []chooseModel{},
 		filterModels: []filterModel{*fm},
@@ -1226,8 +1237,8 @@ func TestGetResults_FilterWithFilteredMatches(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: []string{"a", "b", "c"}, ModelIdx: 0},
-			{Type: PanelFilter, Items: items, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels: []chooseModel{*cm},
 		filterModels: []filterModel{*fm},
@@ -1265,13 +1276,12 @@ func TestHandleSubmit_FilterNoMatches(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: []string{"a", "b", "c"}, ModelIdx: 0},
-			{Type: PanelFilter, Items: items, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels: []chooseModel{},
 		filterModels: []filterModel{*fm},
 		activeIdx:    1,
-		limit:        1,
 	}
 
 	o, _ = o.handleSubmit()
@@ -1296,8 +1306,8 @@ func TestHandleSubmit_FilterWithRandomMessage(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: []string{"a", "b", "c"}, ModelIdx: 0},
-			{Type: PanelFilter, Items: items, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels: []chooseModel{},
 		filterModels: []filterModel{*fm},
@@ -1334,8 +1344,8 @@ func TestGetResults_WithRandomMessages(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: chooseItems, ModelIdx: 0},
-			{Type: PanelFilter, Items: filterItems, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels: []chooseModel{*cm},
 		filterModels: []filterModel{*fm},
@@ -1368,8 +1378,8 @@ func TestView_ChooseAndFilterItemsDisplayed(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: chooseItems, ModelIdx: 0},
-			{Type: PanelFilter, Items: filterItems, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
 		},
 		chooseModels: []chooseModel{*cm},
 		filterModels: []filterModel{*fm},
@@ -1402,9 +1412,9 @@ func TestHandleSubmit_RandomMessagesMultiplePanels(t *testing.T) {
 
 	o := orchestrator{
 		panels: []Panel{
-			{Type: PanelChoose, Items: panel1Items, ModelIdx: 0},
-			{Type: PanelFilter, Items: panel2Items, ModelIdx: 0},
-			{Type: PanelChoose, Items: panel3Items, ModelIdx: 1},
+			{Type: PanelChoose, ModelIdx: 0},
+			{Type: PanelFilter, ModelIdx: 0},
+			{Type: PanelChoose, ModelIdx: 1},
 		},
 		chooseModels: []chooseModel{*cm1, *cm2},
 		filterModels: []filterModel{*fm},
@@ -1453,8 +1463,8 @@ func TestView_ChooseAndFilterWithDifferentDelimiters(t *testing.T) {
 
 			o := orchestrator{
 				panels: []Panel{
-					{Type: PanelChoose, Items: items, ModelIdx: 0},
-					{Type: PanelFilter, Items: items, ModelIdx: 0},
+					{Type: PanelChoose, ModelIdx: 0},
+					{Type: PanelFilter, ModelIdx: 0},
 				},
 				chooseModels: []chooseModel{*cm},
 				filterModels: []filterModel{*fm},
@@ -1507,8 +1517,8 @@ func TestView_ChooseAndFilterWithForcedDelimiter(t *testing.T) {
 
 			o := orchestrator{
 				panels: []Panel{
-					{Type: PanelChoose, Items: items, ModelIdx: 0},
-					{Type: PanelFilter, Items: items, ModelIdx: 0},
+					{Type: PanelChoose, ModelIdx: 0},
+					{Type: PanelFilter, ModelIdx: 0},
 				},
 				chooseModels: []chooseModel{*cm},
 				filterModels: []filterModel{*fm},
@@ -1524,4 +1534,98 @@ func TestView_ChooseAndFilterWithForcedDelimiter(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseChooseBlock(t *testing.T) {
+	t.Run("basic items", func(t *testing.T) {
+		opts, err := parseChooseBlock([]string{"apple", "banana", "cherry"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(opts.Options) != 3 {
+			t.Errorf("expected 3 items, got %d: %v", len(opts.Options), opts.Options)
+		}
+	})
+
+	t.Run("with limit flag", func(t *testing.T) {
+		opts, err := parseChooseBlock([]string{"--limit", "3", "a", "b", "c"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Limit != 3 {
+			t.Errorf("expected Limit=3, got %d", opts.Limit)
+		}
+		if len(opts.Options) != 3 {
+			t.Errorf("expected 3 items, got %d", len(opts.Options))
+		}
+	})
+
+	t.Run("with header flag", func(t *testing.T) {
+		opts, err := parseChooseBlock([]string{"--header", "Ovoce", "apple"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Header != "Ovoce" {
+			t.Errorf("expected Header='Ovoce', got %q", opts.Header)
+		}
+	})
+
+	t.Run("with no-limit flag", func(t *testing.T) {
+		opts, err := parseChooseBlock([]string{"--no-limit", "a", "b"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !opts.NoLimit {
+			t.Error("expected NoLimit=true")
+		}
+	})
+
+	t.Run("invalid flag returns error", func(t *testing.T) {
+		_, err := parseChooseBlock([]string{"--nonexistent-flag", "a"})
+		if err == nil {
+			t.Error("expected error for invalid flag, got nil")
+		}
+	})
+}
+
+func TestParseFilterBlock(t *testing.T) {
+	t.Run("basic items", func(t *testing.T) {
+		opts, err := parseFilterBlock([]string{"mango", "papaya"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(opts.Options) != 2 {
+			t.Errorf("expected 2 items, got %d", len(opts.Options))
+		}
+	})
+
+	t.Run("with no-fuzzy flag", func(t *testing.T) {
+		opts, err := parseFilterBlock([]string{"--no-fuzzy", "mango"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Fuzzy {
+			t.Error("expected Fuzzy=false")
+		}
+	})
+
+	t.Run("with placeholder flag", func(t *testing.T) {
+		opts, err := parseFilterBlock([]string{"--placeholder", "Hledat...", "mango"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Placeholder != "Hledat..." {
+			t.Errorf("expected Placeholder='Hledat...', got %q", opts.Placeholder)
+		}
+	})
+
+	t.Run("with no-strict flag", func(t *testing.T) {
+		opts, err := parseFilterBlock([]string{"--no-strict", "mango"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Strict {
+			t.Error("expected Strict=false")
+		}
+	})
 }

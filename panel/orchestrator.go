@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/alecthomas/kong"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/paginator"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/gum/internal/stdin"
+	"github.com/charmbracelet/gum/choose"
+	"github.com/charmbracelet/gum/filter"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 )
@@ -50,19 +52,8 @@ type orchestrator struct {
 	promptStyle      lipgloss.Style
 	placeholderStyle lipgloss.Style
 
-	// Options
-	limit            int
-	noLimit          bool
-	selectedPrefix   string
-	unselectedPrefix string
-	cursor           string
-	cursorPrefix     string
-	fuzzy            bool
-	fuzzySort        bool
-	strict           bool
-	placeholder      string
-	prompt           string
-	value            string
+	// Global options
+	single bool
 
 	chooseModels []chooseModel
 	filterModels []filterModel
@@ -85,6 +76,7 @@ type chooseModel struct {
 	cursorPrefix      string
 	items             []chooseItem
 	limit             int
+	noLimit           bool
 	numSelected       int
 	paginator         paginator.Model
 	showHelp          bool
@@ -127,6 +119,7 @@ type filterModel struct {
 	header                string
 	selected              map[string]struct{}
 	limit                 int
+	noLimit               bool
 	numSelected           int
 	indicator             string
 	selectedPrefix        string
@@ -175,6 +168,7 @@ type panelKeymap struct {
 	LeftPanel  key.Binding
 	RightPanel key.Binding
 	Submit     key.Binding
+	SubmitAll  key.Binding // Submit all current selections without auto-selecting
 	Quit       key.Binding
 }
 
@@ -182,7 +176,7 @@ type panelKeymap struct {
 func (k panelKeymap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.NextPanel, k.PrevPanel, k.LeftPanel, k.RightPanel},
-		{k.Submit, k.Quit},
+		{k.Submit, k.SubmitAll, k.Quit},
 	}
 }
 
@@ -192,6 +186,7 @@ func (k panelKeymap) ShortHelp() []key.Binding {
 		k.NextPanel,
 		k.PrevPanel,
 		k.Submit,
+		k.SubmitAll,
 		k.Quit,
 	}
 }
@@ -217,6 +212,10 @@ func defaultPanelKeymap() panelKeymap {
 		Submit: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "next/submit"),
+		),
+		SubmitAll: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "submit all"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("esc", "ctrl+c"),
@@ -270,59 +269,127 @@ func (o Options) BorderStyle() lipgloss.Style {
 	return borderStyle
 }
 
-func parsePanelsFromArgs(args []string, inputDelimiter string, stripANSI bool) ([]Panel, error) {
+// kongVars are the default variables required by choose/filter Options structs.
+var kongVars = kong.Vars{
+	"defaultHeight":           "0",
+	"defaultWidth":            "0",
+	"defaultAlign":            "left",
+	"defaultBorder":           "none",
+	"defaultBorderForeground": "",
+	"defaultBorderBackground": "",
+	"defaultBackground":       "",
+	"defaultForeground":       "",
+	"defaultMargin":           "0 0",
+	"defaultPadding":          "0 0",
+	"defaultUnderline":        "false",
+	"defaultBold":             "false",
+	"defaultFaint":            "false",
+	"defaultItalic":           "false",
+	"defaultStrikethrough":    "false",
+}
+
+func parseChooseBlock(args []string) (*choose.Options, error) {
+	var opts choose.Options
+	parser, err := kong.New(&opts, kong.Exit(func(int) {}), kongVars)
+	if err != nil {
+		return nil, fmt.Errorf("create choose parser: %w", err)
+	}
+	if _, err = parser.Parse(args); err != nil {
+		return nil, fmt.Errorf("invalid choose options: %w", err)
+	}
+	return &opts, nil
+}
+
+func parseFilterBlock(args []string) (*filter.Options, error) {
+	var opts filter.Options
+	parser, err := kong.New(&opts, kong.Exit(func(int) {}), kongVars)
+	if err != nil {
+		return nil, fmt.Errorf("create filter parser: %w", err)
+	}
+	if _, err = parser.Parse(args); err != nil {
+		return nil, fmt.Errorf("invalid filter options: %w", err)
+	}
+	return &opts, nil
+}
+
+// parsePanelsFromArgs parses panel blocks separated by "--" tokens.
+// Each block starts with "choose" or "filter" followed by flags and items.
+// Example: ["choose", "--limit", "3", "a", "b", "--", "filter", "x", "y"]
+func parsePanelsFromArgs(args []string, _ string, _ bool) ([]Panel, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("no panels specified")
+		return nil, fmt.Errorf("no panels specified\n\nExample:\n  gum panel -- choose apple banana -- filter mango papaya")
 	}
 
-	var stdinData string
-	if !stdin.IsEmpty() {
-		data, _ := stdin.Read(stdin.StripANSI(stripANSI))
-		if data != "" {
-			stdinData = data
+	blocks := splitOnSeparator(args, "--")
+
+	var panels []Panel
+	for _, block := range blocks {
+		if len(block) == 0 {
+			continue
 		}
-	}
-
-	panels := make([]Panel, 0)
-	var currentPanel *Panel
-
-	for _, arg := range args {
-		argLower := strings.ToLower(arg)
-
-		if argLower == "choose" || argLower == "filter" {
-			if currentPanel != nil && len(currentPanel.Items) > 0 {
-				panels = append(panels, *currentPanel)
-			}
-
-			panelType := PanelType(argLower)
-			currentPanel = &Panel{
-				Type:  panelType,
-				Items: []string{},
-			}
-		} else if currentPanel != nil {
-			currentPanel.Items = append(currentPanel.Items, arg)
-		} else if stdinData != "" {
-			items := strings.Split(stdinData, inputDelimiter)
-			for i := range items {
-				if items[i] != "" {
-					panels = append(panels, Panel{
-						Type:  PanelChoose,
-						Items: []string{items[i]},
-					})
-				}
-			}
+		p, err := parseBlock(block)
+		if err != nil {
+			return nil, err
 		}
-	}
-
-	if currentPanel != nil && len(currentPanel.Items) > 0 {
-		panels = append(panels, *currentPanel)
+		panels = append(panels, p)
 	}
 
 	if len(panels) == 0 {
-		return nil, fmt.Errorf("no panels specified")
+		return nil, fmt.Errorf("no panels specified\n\nExample:\n  gum panel -- choose apple banana -- filter mango papaya")
 	}
 
 	return panels, nil
+}
+
+// splitOnSeparator splits a string slice into sub-slices on separator tokens.
+func splitOnSeparator(args []string, sep string) [][]string {
+	var blocks [][]string
+	var current []string
+	for _, arg := range args {
+		if arg == sep {
+			blocks = append(blocks, current)
+			current = nil
+		} else {
+			current = append(current, arg)
+		}
+	}
+	blocks = append(blocks, current)
+	return blocks
+}
+
+// parseBlock parses a single panel block: first token is type, rest are options+items.
+func parseBlock(block []string) (Panel, error) {
+	typeName := strings.ToLower(block[0])
+	rest := block[1:]
+
+	switch PanelType(typeName) {
+	case PanelChoose:
+		if len(rest) == 0 {
+			return Panel{}, fmt.Errorf("choose panel has no items")
+		}
+		opts, err := parseChooseBlock(rest)
+		if err != nil {
+			return Panel{}, err
+		}
+		if len(opts.Options) == 0 {
+			return Panel{}, fmt.Errorf("choose panel has no items")
+		}
+		return Panel{Type: PanelChoose, ChooseOpts: opts}, nil
+	case PanelFilter:
+		if len(rest) == 0 {
+			return Panel{}, fmt.Errorf("filter panel has no items")
+		}
+		opts, err := parseFilterBlock(rest)
+		if err != nil {
+			return Panel{}, err
+		}
+		if len(opts.Options) == 0 {
+			return Panel{}, fmt.Errorf("filter panel has no items")
+		}
+		return Panel{Type: PanelFilter, FilterOpts: opts}, nil
+	default:
+		return Panel{}, fmt.Errorf("unknown panel type %q: expected 'choose' or 'filter'", block[0])
+	}
 }
 
 func (m *orchestrator) initModels(o Options) error {
@@ -335,9 +402,24 @@ func (m *orchestrator) initModels(o Options) error {
 	for i, panel := range m.panels {
 		switch panel.Type {
 		case PanelChoose:
-			items := make([]chooseItem, len(panel.Items))
-			for i, item := range panel.Items {
-				items[i] = chooseItem{Text: item, Selected: false, Order: 0}
+			co := panel.ChooseOpts
+			items := make([]chooseItem, len(co.Options))
+			for j, item := range co.Options {
+				items[j] = chooseItem{Text: item, Selected: false, Order: j}
+			}
+
+			// Handle pre-selected items
+			for _, sel := range co.Selected {
+				for j := range items {
+					if items[j].Text == sel || sel == "*" {
+						items[j].Selected = true
+					}
+				}
+			}
+
+			limit := co.Limit
+			if co.NoLimit {
+				limit = len(items)
 			}
 
 			pager := paginator.New()
@@ -346,10 +428,10 @@ func (m *orchestrator) initModels(o Options) error {
 			pager.Type = paginator.Dots
 
 			km := defaultChooseKeymap()
-			if o.NoLimit || o.Limit > 1 {
+			if co.NoLimit || co.Limit > 1 {
 				km.Toggle.SetEnabled(true)
 			}
-			if o.NoLimit {
+			if co.NoLimit {
 				km.ToggleAll.SetEnabled(true)
 			}
 
@@ -358,13 +440,14 @@ func (m *orchestrator) initModels(o Options) error {
 				currentOrder:      0,
 				height:            o.Height,
 				padding:           []int{0, 0, 0, 0},
-				cursor:            o.Cursor,
-				header:            "",
-				selectedPrefix:    o.SelectedPrefix,
-				unselectedPrefix:  o.UnselectedPrefix,
-				cursorPrefix:      o.CursorPrefix,
+				cursor:            co.Cursor,
+				header:            co.Header,
+				selectedPrefix:    co.SelectedPrefix,
+				unselectedPrefix:  co.UnselectedPrefix,
+				cursorPrefix:      co.CursorPrefix,
 				items:             items,
-				limit:             o.Limit,
+				limit:             limit,
+				noLimit:           co.NoLimit,
 				numSelected:       0,
 				paginator:         pager,
 				showHelp:          false,
@@ -381,30 +464,49 @@ func (m *orchestrator) initModels(o Options) error {
 			chooseIdx++
 
 		case PanelFilter:
+			fo := panel.FilterOpts
 			ti := textinput.New()
 			ti.Focus()
-			ti.Prompt = o.Prompt
+			ti.Prompt = fo.Prompt
 			ti.PromptStyle = o.PromptStyle.ToLipgloss()
-			ti.Placeholder = o.Placeholder
+			ti.Placeholder = fo.Placeholder
 			ti.PlaceholderStyle = o.PlaceholderStyle.ToLipgloss()
+			if fo.Value != "" {
+				ti.SetValue(fo.Value)
+			}
 
 			v := viewport.New(0, o.Height)
 
-			choices := map[string]string{}
-			filteringChoices := []string{}
-			for _, opt := range panel.Items {
+			choices := make(map[string]string, len(fo.Options))
+			filteringChoices := make([]string, 0, len(fo.Options))
+			for _, opt := range fo.Options {
 				choices[opt] = opt
 				filteringChoices = append(filteringChoices, opt)
 			}
 
 			matches := matchAll(filteringChoices)
 
+			limit := fo.Limit
+			if fo.NoLimit {
+				limit = len(fo.Options)
+			}
+
 			fkm := defaultFilterKeymap()
-			if o.NoLimit || o.Limit > 1 {
+			if fo.NoLimit || fo.Limit > 1 {
 				fkm.Toggle.SetEnabled(true)
 				fkm.ToggleAndPrevious.SetEnabled(true)
 				fkm.ToggleAndNext.SetEnabled(true)
 				fkm.ToggleAll.SetEnabled(true)
+			}
+
+			// Handle pre-selected items
+			preSelected := make(map[string]struct{})
+			for _, sel := range fo.Selected {
+				for _, c := range fo.Options {
+					if c == sel || sel == "*" {
+						preSelected[c] = struct{}{}
+					}
+				}
 			}
 
 			fm := filterModel{
@@ -414,13 +516,14 @@ func (m *orchestrator) initModels(o Options) error {
 				filteringChoices:      filteringChoices,
 				matches:               matches,
 				cursor:                0,
-				header:                "",
-				selected:              make(map[string]struct{}),
-				limit:                 o.Limit,
-				numSelected:           0,
-				indicator:             "•",
-				selectedPrefix:        o.SelectedPrefix,
-				unselectedPrefix:      o.UnselectedPrefix,
+				header:                fo.Header,
+				selected:              preSelected,
+				limit:                 limit,
+				noLimit:               fo.NoLimit,
+				numSelected:           len(preSelected),
+				indicator:             fo.Indicator,
+				selectedPrefix:        fo.SelectedPrefix,
+				unselectedPrefix:      fo.UnselectedPrefix,
 				height:                o.Height,
 				padding:               []int{0, 0, 0, 0},
 				quitting:              false,
@@ -431,17 +534,14 @@ func (m *orchestrator) initModels(o Options) error {
 				indicatorStyle:        o.IndicatorStyle.ToLipgloss(),
 				selectedPrefixStyle:   o.SelectedPrefixStyle.ToLipgloss(),
 				unselectedPrefixStyle: o.UnselectedPrefixStyle.ToLipgloss(),
-				reverse:               false,
-				fuzzy:                 o.Fuzzy,
-				sort:                  o.FuzzySort,
-				strict:                o.Strict,
-				value:                 o.Value,
+				reverse:               fo.Reverse,
+				fuzzy:                 fo.Fuzzy,
+				sort:                  fo.FuzzySort,
+				strict:                fo.Strict,
+				value:                 fo.Value,
 				showHelp:              false,
 				keymap:                fkm,
 				submitted:             false,
-			}
-			if o.Value != "" {
-				fm.textinput.SetValue(o.Value)
 			}
 			m.filterModels = append(m.filterModels, fm)
 			m.panels[i].ModelIdx = filterIdx
@@ -528,7 +628,7 @@ func defaultFilterKeymap() filterKeymap {
 			key.WithDisabled(),
 		),
 		Toggle: key.NewBinding(
-			key.WithKeys("ctrl+@"),
+			key.WithKeys("ctrl+@", "shift+space"),
 			key.WithHelp("ctrl+@", "toggle"),
 			key.WithDisabled(),
 		),
@@ -569,7 +669,7 @@ func matchAll(options []string) []fuzzy.Match {
 }
 
 func (m orchestrator) Init() tea.Cmd {
-	var cmds []tea.Cmd
+	cmds := make([]tea.Cmd, 0, len(m.chooseModels)+len(m.filterModels))
 
 	for range m.chooseModels {
 		cmds = append(cmds, nil)
@@ -603,6 +703,9 @@ func (m orchestrator) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, km.Submit):
 			return m.handleSubmit()
+
+		case key.Matches(msg, km.SubmitAll):
+			return m.handleSubmitAll()
 
 		case key.Matches(msg, km.Quit):
 			m.quitting = true
@@ -687,7 +790,7 @@ func (m *orchestrator) updateChooseModel(cm *chooseModel, msg tea.Msg) tea.Cmd {
 				cm.currentOrder++
 			}
 		case key.Matches(msg, km.ToggleAll):
-			if cm.limit <= 1 {
+			if cm.limit <= 1 && !cm.noLimit {
 				break
 			}
 			if cm.numSelected < len(cm.items) && cm.numSelected < cm.limit {
@@ -749,29 +852,30 @@ func (m *orchestrator) updateFilterModel(fm *filterModel, msg tea.Msg) tea.Cmd {
 		case key.Matches(msg, km.End):
 			fm.cursor = len(fm.choices) - 1
 		case key.Matches(msg, km.ToggleAndNext):
-			if fm.limit == 1 {
+			if fm.limit == 1 && !fm.noLimit {
 				break
 			}
 			m.toggleFilterSelection(fm)
 			m.filterCursorDown(fm)
 		case key.Matches(msg, km.ToggleAndPrevious):
-			if fm.limit == 1 {
+			if fm.limit == 1 && !fm.noLimit {
 				break
 			}
 			m.toggleFilterSelection(fm)
 			m.filterCursorUp(fm)
 		case key.Matches(msg, km.Toggle):
-			if fm.limit == 1 {
+			if fm.limit == 1 && !fm.noLimit {
 				break
 			}
 			m.toggleFilterSelection(fm)
 		case key.Matches(msg, km.ToggleAll):
-			if fm.limit <= 1 {
+			if fm.limit <= 1 && !fm.noLimit {
 				break
 			}
-			if fm.numSelected < len(fm.matches) && fm.numSelected < fm.limit {
+			maxSelect := fm.limit
+			if fm.numSelected < len(fm.matches) && fm.numSelected < maxSelect {
 				for i := range fm.matches {
-					if fm.numSelected >= fm.limit {
+					if fm.numSelected >= maxSelect {
 						break
 					}
 					if _, ok := fm.selected[fm.matches[i].Str]; !ok {
@@ -860,7 +964,7 @@ func exactMatches(search string, choices []string) []fuzzy.Match {
 		matchedString := strings.ToLower(choice)
 		index := strings.Index(matchedString, search)
 		if index >= 0 {
-			matchedIndexes := []int{}
+			matchedIndexes := make([]int, 0, len(search))
 			for s := range search {
 				matchedIndexes = append(matchedIndexes, index+s)
 			}
@@ -911,7 +1015,21 @@ func (m orchestrator) View() string {
 			}
 		}
 
-		panelHeader := strings.ToUpper(string(panel.Type))
+		// Use per-panel header if set, otherwise use panel type as title
+		var panelHeader string
+		switch panel.Type {
+		case PanelChoose:
+			if panel.ChooseOpts != nil {
+				panelHeader = panel.ChooseOpts.Header
+			}
+		case PanelFilter:
+			if panel.FilterOpts != nil {
+				panelHeader = panel.FilterOpts.Header
+			}
+		}
+		if panelHeader == "" {
+			panelHeader = strings.ToUpper(string(panel.Type))
+		}
 		headerView := m.headerStyle.Render(" " + panelHeader + " ")
 		if i == m.activeIdx {
 			headerView = " ● " + headerView
@@ -931,18 +1049,7 @@ func (m orchestrator) View() string {
 	if m.vertical {
 		joinedView = lipgloss.JoinVertical(lipgloss.Top, panelViews...)
 	} else {
-		if m.gap > 0 && len(panelViews) > 1 {
-			gapViews := make([]string, 0, len(panelViews)*2-1)
-			for i, pv := range panelViews {
-				gapViews = append(gapViews, pv)
-				if i < len(panelViews)-1 {
-					gapViews = append(gapViews, strings.Repeat(" ", m.gap))
-				}
-			}
-			joinedView = lipgloss.JoinHorizontal(lipgloss.Top, gapViews...)
-		} else {
-			joinedView = lipgloss.JoinHorizontal(lipgloss.Top, panelViews...)
-		}
+		joinedView = m.joinHorizontalWithGap(panelViews)
 	}
 
 	if m.showHelp {
@@ -983,7 +1090,7 @@ func (m orchestrator) renderChooseView(cm *chooseModel) string {
 		} else {
 			s.WriteString(cm.itemStyle.Render(cm.unselectedPrefix + item.Text))
 		}
-		if i != cm.height {
+		if i < len(cm.items[start:end])-1 {
 			s.WriteRune('\n')
 		}
 	}
@@ -1040,49 +1147,96 @@ func (m orchestrator) renderFilterView(fm *filterModel) string {
 }
 
 func (m orchestrator) getResults(outputDelimiter string) []string {
-	var results []string
+	results := make([]string, len(m.panels))
 
-	for _, panel := range m.panels {
+	for i, panel := range m.panels {
+		var panelItems []string
+
 		switch panel.Type {
 		case PanelChoose:
 			if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.chooseModels) {
 				cm := m.chooseModels[panel.ModelIdx]
-				selectedCount := 0
 				for _, item := range cm.items {
 					if item.Selected {
-						results = append(results, item.Text)
-						selectedCount++
+						panelItems = append(panelItems, item.Text)
 					}
-				}
-				// If no selection in this panel, add whitespace to maintain output field count
-				if selectedCount == 0 {
-					results = append(results, "")
 				}
 			}
 		case PanelFilter:
 			if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.filterModels) {
 				fm := m.filterModels[panel.ModelIdx]
-				selectedCount := 0
 				for k := range fm.selected {
-					results = append(results, k)
-					selectedCount++
-				}
-				// If no selection in this panel, add whitespace to maintain output field count
-				if selectedCount == 0 {
-					results = append(results, "")
+					panelItems = append(panelItems, k)
 				}
 			}
 		}
+
+		results[i] = strings.Join(panelItems, outputDelimiter)
 	}
 
 	return results
 }
 
+// getSingleResult returns the single selected item (used with --single flag).
+func (m orchestrator) getSingleResult() string {
+	if m.activeIdx < 0 || m.activeIdx >= len(m.panels) {
+		return ""
+	}
+	panel := m.panels[m.activeIdx]
+	switch panel.Type {
+	case PanelChoose:
+		if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.chooseModels) {
+			cm := m.chooseModels[panel.ModelIdx]
+			for _, item := range cm.items {
+				if item.Selected {
+					return item.Text
+				}
+			}
+		}
+	case PanelFilter:
+		if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.filterModels) {
+			fm := m.filterModels[panel.ModelIdx]
+			for k := range fm.selected {
+				return k
+			}
+		}
+	}
+	return ""
+}
+
 func (m *orchestrator) handleSubmit() (orchestrator, tea.Cmd) {
 	panel := m.panels[m.activeIdx]
 
-	switch panel.Type {
-	case PanelChoose:
+	// Handle --single mode: select current item and quit immediately
+	if m.single {
+		switch panel.Type {
+		case PanelChoose:
+			if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.chooseModels) {
+				cm := &m.chooseModels[panel.ModelIdx]
+				// Clear previous selections and select only current item
+				for i := range cm.items {
+					cm.items[i].Selected = false
+				}
+				cm.items[cm.index].Selected = true
+				cm.numSelected = 1
+			}
+		case PanelFilter:
+			if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.filterModels) {
+				fm := &m.filterModels[panel.ModelIdx]
+				if len(fm.matches) > 0 {
+					fm.selected = make(map[string]struct{})
+					fm.selected[fm.matches[fm.cursor].Str] = struct{}{}
+					fm.numSelected = 1
+				}
+			}
+		}
+		m.submitted = true
+		m.quitting = true
+		return *m, tea.Quit
+	}
+
+	// Default mode: only auto-select when limit == 1 (explicit selection required when noLimit)
+	if panel.Type == PanelChoose {
 		if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.chooseModels) {
 			cm := &m.chooseModels[panel.ModelIdx]
 			if cm.limit <= 1 && cm.numSelected < 1 {
@@ -1090,7 +1244,7 @@ func (m *orchestrator) handleSubmit() (orchestrator, tea.Cmd) {
 				cm.numSelected = 1
 			}
 		}
-	case PanelFilter:
+	} else if panel.Type == PanelFilter {
 		if panel.ModelIdx >= 0 && panel.ModelIdx < len(m.filterModels) {
 			fm := &m.filterModels[panel.ModelIdx]
 			if len(fm.selected) == 0 && fm.limit <= 1 && len(fm.matches) > 0 {
@@ -1109,6 +1263,24 @@ func (m *orchestrator) handleSubmit() (orchestrator, tea.Cmd) {
 		return *m, nil
 	}
 
+	if m.all {
+		firstIncomplete := m.findFirstIncompletePanel()
+		if firstIncomplete >= 0 {
+			m.activeIdx = firstIncomplete
+			m.errorMessage = "You must make a choice in all panels!"
+			return *m, nil
+		}
+	}
+
+	m.submitted = true
+	m.quitting = true
+	return *m, tea.Quit
+}
+
+// handleSubmitAll submits all current selections without auto-selecting.
+// This allows users to submit without selecting anything in the last panel.
+func (m *orchestrator) handleSubmitAll() (orchestrator, tea.Cmd) {
+	// Check --all requirement
 	if m.all {
 		firstIncomplete := m.findFirstIncompletePanel()
 		if firstIncomplete >= 0 {
@@ -1143,4 +1315,18 @@ func (m *orchestrator) findFirstIncompletePanel() int {
 		}
 	}
 	return -1
+}
+
+func (m *orchestrator) joinHorizontalWithGap(panelViews []string) string {
+	if m.gap > 0 && len(panelViews) > 1 {
+		gapViews := make([]string, 0, len(panelViews)*2-1)
+		for i, pv := range panelViews {
+			gapViews = append(gapViews, pv)
+			if i < len(panelViews)-1 {
+				gapViews = append(gapViews, strings.Repeat(" ", m.gap))
+			}
+		}
+		return lipgloss.JoinHorizontal(lipgloss.Top, gapViews...)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, panelViews...)
 }

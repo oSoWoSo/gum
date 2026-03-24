@@ -28,9 +28,9 @@ func (o Options) Run() error {
 	}
 
 	m := orchestrator{
-		panels:      panels,
-		activeIdx:   0,
-		height:      height,
+		panels:    panels,
+		activeIdx: o.Active,
+		height:    height,
 		borderStyle: o.BorderStyle(),
 		showHelp:    o.ShowHelp,
 		gap:         o.Gap,
@@ -39,6 +39,7 @@ func (o Options) Run() error {
 		delimiter:   o.Delimiter,
 		debug:       o.Debug,
 		all:         o.All,
+		single:      o.Single,
 
 		// Border styles
 		activeBorderStyle:   o.ActiveBorderStyle.ToLipgloss(),
@@ -62,26 +63,12 @@ func (o Options) Run() error {
 		promptStyle:      o.PromptStyle.ToLipgloss(),
 		placeholderStyle: o.PlaceholderStyle.ToLipgloss(),
 
-		// Options
-		limit:            o.Limit,
-		noLimit:          o.NoLimit,
-		selectedPrefix:   o.SelectedPrefix,
-		unselectedPrefix: o.UnselectedPrefix,
-		cursor:           o.Cursor,
-		cursorPrefix:     o.CursorPrefix,
-		fuzzy:            o.Fuzzy,
-		fuzzySort:        o.FuzzySort,
-		strict:           o.Strict,
-		placeholder:      o.Placeholder,
-		prompt:           o.Prompt,
-		value:            o.Value,
-
 		keymap: defaultPanelKeymap(),
 		help:   help.New(),
 	}
 
-	if err := m.initModels(o); err != nil {
-		return err
+	if initErr := m.initModels(o); initErr != nil {
+		return initErr
 	}
 
 	ctx, cancel := timeout.Context(o.Timeout)
@@ -102,13 +89,16 @@ func (o Options) Run() error {
 		return os.ErrInvalid
 	}
 
-	output := result.getResults(o.OutputDelimiter)
-
 	var finalOutput string
-	if o.Stacked {
-		finalOutput = strings.Join(output, "\n"+o.Delimiter+"\n")
+	if o.Single {
+		finalOutput = result.getSingleResult()
 	} else {
-		finalOutput = strings.Join(output, o.OutputDelimiter)
+		output := result.getResults(o.OutputDelimiter)
+		if o.Stacked {
+			finalOutput = strings.Join(output, "\n"+o.Delimiter+"\n")
+		} else {
+			finalOutput = strings.Join(output, "\n")
+		}
 	}
 
 	tty.Println(finalOutput)

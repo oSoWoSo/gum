@@ -227,13 +227,14 @@ type Gum struct {
 	//
 	VersionCheck version.Options `cmd:"" help:"Semver check current gum version"`
 
-	// Panel provides a multi-panel TUI interface with the ability to
-	// switch between different panels (choose, filter) side by side.
+	// Panel provides a multi-panel TUI with choose and filter panels side by side.
 	//
-	// This is useful when you need multiple interactive selections in a single
-	// TUI session.
+	// Each panel block starts with 'choose' or 'filter' and accepts the same
+	// flags as 'gum choose' / 'gum filter'. Blocks are separated by '--'.
 	//
-	// $ gum panel choose a b c filter x y z
+	// $ gum panel -- choose apple banana cherry -- filter mango papaya
+	// $ gum panel -- choose --limit 3 --header "Pick fruit" apple banana cherry \
+	//             -- filter --no-fuzzy --placeholder "Search" mango papaya
 	//
-	Panel panel.Options `cmd:"" help:"Run multiple panels side by side"`
+	Panel panel.Options `cmd:"" help:"Run multiple choose/filter panels side by side"`
 }

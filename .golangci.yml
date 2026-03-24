@@ -4,6 +4,7 @@ run:
 linters:
   enable:
     - bodyclose
+    - errcheck
     - exhaustive
     - goconst
     - godot
@@ -17,13 +18,16 @@ linters:
     - noctx
     - nolintlint
     - prealloc
-    - revive
     - rowserrcheck
+    - staticcheck
     - sqlclosecheck
     - tparallel
     - unconvert
-    - unparam
     - whitespace
+  disable:
+    - govet
+    - revive
+    - unparam
     - wrapcheck
   exclusions:
     rules:
@@ -33,9 +37,14 @@ linters:
     generated: lax
     presets:
       - common-false-positives
+    paths:
+      - '.*_test\.go'
   settings:
     exhaustive:
       default-signifies-exhaustive: true
+    staticcheck:
+      checks:
+        - "all"
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
