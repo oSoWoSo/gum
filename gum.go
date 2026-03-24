@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/gum/log"
 	"github.com/charmbracelet/gum/man"
 	"github.com/charmbracelet/gum/pager"
+	"github.com/charmbracelet/gum/panel"
 	"github.com/charmbracelet/gum/spin"
 	"github.com/charmbracelet/gum/style"
 	"github.com/charmbracelet/gum/table"
@@ -225,4 +226,14 @@ type Gum struct {
 	// $ gum version-check '~> 0.15'
 	//
 	VersionCheck version.Options `cmd:"" help:"Semver check current gum version"`
+
+	// Panel provides a multi-panel TUI interface with the ability to
+	// switch between different panels (choose, filter) side by side.
+	//
+	// This is useful when you need multiple interactive selections in a single
+	// TUI session.
+	//
+	// $ gum panel choose a b c filter x y z
+	//
+	Panel panel.Options `cmd:"" help:"Run multiple panels side by side"`
 }
