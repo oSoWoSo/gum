@@ -1629,3 +1629,62 @@ func TestParseFilterBlock(t *testing.T) {
 		}
 	})
 }
+
+// TestEnvVarsRespectedBySubParsers verifies that GUM_FILTER_* and GUM_CHOOSE_*
+// environment variables are picked up by the per-panel sub-parsers.
+func TestEnvVarsRespectedBySubParsers(t *testing.T) {
+	t.Run("GUM_FILTER_PLACEHOLDER respected", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_PLACEHOLDER", "Hledat ve filtru...")
+		opts, err := parseFilterBlock([]string{"mango", "papaya"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Placeholder != "Hledat ve filtru..." {
+			t.Errorf("expected Placeholder='Hledat ve filtru...', got %q", opts.Placeholder)
+		}
+	})
+
+	t.Run("GUM_FILTER_HEADER respected", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_HEADER", "Moje ovoce")
+		opts, err := parseFilterBlock([]string{"mango"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Header != "Moje ovoce" {
+			t.Errorf("expected Header='Moje ovoce', got %q", opts.Header)
+		}
+	})
+
+	t.Run("GUM_FILTER_* overridden by explicit per-panel flag", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_PLACEHOLDER", "from env")
+		opts, err := parseFilterBlock([]string{"--placeholder", "from flag", "mango"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Placeholder != "from flag" {
+			t.Errorf("explicit flag should override env var, got %q", opts.Placeholder)
+		}
+	})
+
+	t.Run("GUM_CHOOSE_HEADER respected", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_HEADER", "Vyber ovoce")
+		opts, err := parseChooseBlock([]string{"apple", "banana"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Header != "Vyber ovoce" {
+			t.Errorf("expected Header='Vyber ovoce', got %q", opts.Header)
+		}
+	})
+
+	t.Run("GUM_CHOOSE_* overridden by explicit per-panel flag", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_HEADER", "from env")
+		opts, err := parseChooseBlock([]string{"--header", "from flag", "apple"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Header != "from flag" {
+			t.Errorf("explicit flag should override env var, got %q", opts.Header)
+		}
+	})
+}
