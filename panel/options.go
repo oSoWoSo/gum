@@ -25,20 +25,20 @@ type Options struct {
 	Panel []string `arg:"" help:"Panel blocks: -- choose [choose-flags] items... -- filter [filter-flags] items... (see 'gum choose --help' / 'gum filter --help' for per-panel flags)"`
 
 	// Layout
-	Vertical bool `help:"Arrange panels vertically instead of horizontally" group:"Layout"`
-	Gap      int  `help:"Space between panels" default:"1" env:"GUM_PANEL_GAP" group:"Layout"`
-	Height   int  `help:"Height of each panel" default:"10" env:"GUM_PANEL_HEIGHT" group:"Layout"`
+	Vertical bool   `help:"Arrange panels vertically instead of horizontally" env:"GUM_PANEL_VERTICAL" group:"Layout"`
+	Gap      int    `help:"Space between panels" default:"1" env:"GUM_PANEL_GAP" group:"Layout"`
+	Height   int    `help:"Height of each panel" default:"10" env:"GUM_PANEL_HEIGHT" group:"Layout"`
 	Border   string `help:"Border style (none, single, double, rounded)" default:"single" env:"GUM_PANEL_BORDER" group:"Layout"`
 
 	// Output
-	Stacked         bool   `help:"Separate panel outputs with --delimiter" default:"true" negatable:"" group:"Output"`
-	Delimiter       string `help:"Separator printed between panel outputs (requires --stacked)" default:"---" group:"Output"`
+	Stacked         bool   `help:"Separate panel outputs with --delimiter" default:"true" negatable:"" env:"GUM_PANEL_STACKED" group:"Output"`
+	Delimiter       string `help:"Separator printed between panel outputs (requires --stacked)" default:"---" env:"GUM_PANEL_DELIMITER" group:"Output"`
 	OutputDelimiter string `help:"Delimiter between multiple selections within one panel" default:"|" env:"GUM_PANEL_OUTPUT_DELIMITER" group:"Output"`
 
 	// Selection
-	Single bool `help:"Enter selects current item and exits immediately" group:"Selection"`
-	All    bool `help:"Require at least one selection in every panel before submitting" group:"Selection"`
-	Active int  `help:"Index of the initially active panel (0-based)" default:"0" group:"Selection"`
+	Single bool `help:"Enter selects current item and exits immediately" env:"GUM_PANEL_SINGLE" group:"Selection"`
+	All    bool `help:"Require at least one selection in every panel before submitting" env:"GUM_PANEL_ALL" group:"Selection"`
+	Active int  `help:"Index of the initially active panel (0-based)" default:"0" env:"GUM_PANEL_ACTIVE" group:"Selection"`
 
 	// Misc
 	ShowHelp bool          `help:"Show key bindings footer" default:"true" negatable:"" env:"GUM_PANEL_SHOW_HELP" group:"Misc"`
