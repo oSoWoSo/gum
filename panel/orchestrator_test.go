@@ -1826,3 +1826,221 @@ func TestEnvVarsRespectedBySubParsers(t *testing.T) {
 		}
 	})
 }
+
+// makeOrchestrator builds a minimal orchestrator with the given panels and calls
+// initModels. Returns the initialised orchestrator or fails the test.
+func makeOrchestrator(t *testing.T, panels []Panel, globalOpts Options) *orchestrator {
+	t.Helper()
+	if globalOpts.Height == 0 {
+		globalOpts.Height = 10
+	}
+	m := &orchestrator{
+		panels:               panels,
+		activeBorderStyle:    globalOpts.ActiveBorderStyle.ToLipgloss(),
+		inactiveBorderStyle:  globalOpts.InactiveBorderStyle.ToLipgloss(),
+		activeIndicatorStyle: globalOpts.ActiveIndicatorStyle.ToLipgloss(),
+		headerStyle:          globalOpts.HeaderStyle.ToLipgloss(),
+		cursorStyle:          globalOpts.CursorStyle.ToLipgloss(),
+		itemStyle:            globalOpts.ItemStyle.ToLipgloss(),
+		selectedItemStyle:    globalOpts.SelectedItemStyle.ToLipgloss(),
+		indicatorStyle:       globalOpts.IndicatorStyle.ToLipgloss(),
+		selectedPrefixStyle:  globalOpts.SelectedPrefixStyle.ToLipgloss(),
+		unselectedPrefixStyle: globalOpts.UnselectedPrefixStyle.ToLipgloss(),
+		matchStyle:           globalOpts.MatchStyle.ToLipgloss(),
+		textStyle:            globalOpts.TextStyle.ToLipgloss(),
+		cursorTextStyle:      globalOpts.CursorTextStyle.ToLipgloss(),
+		promptStyle:          globalOpts.PromptStyle.ToLipgloss(),
+		placeholderStyle:     globalOpts.PlaceholderStyle.ToLipgloss(),
+		borderStyle:          globalOpts.BorderStyle(),
+	}
+	if err := m.initModels(globalOpts); err != nil {
+		t.Fatalf("initModels: %v", err)
+	}
+	return m
+}
+
+// TestPerPanelEnvVarsPropagateThroughToModels verifies that GUM_FILTER_* and
+// GUM_CHOOSE_* env vars travel the full path:
+//   env var → parseFilterBlock/parseChooseBlock → initModels → model field
+//
+// These are distinct from GUM_PANEL_* (global) — they set per-panel behaviour
+// such as placeholder text, prompt, header, cursor prefix, fuzzy mode, etc.
+func TestPerPanelEnvVarsPropagateThroughToModels(t *testing.T) {
+	defaultOpts := Options{Height: 10}
+
+	t.Run("GUM_FILTER_PLACEHOLDER sets filterModel textinput placeholder", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_PLACEHOLDER", "Hledat...")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if got := m.filterModels[0].textinput.Placeholder; got != "Hledat..." {
+			t.Errorf("textinput.Placeholder = %q, want %q", got, "Hledat...")
+		}
+	})
+
+	t.Run("GUM_FILTER_PROMPT sets filterModel textinput prompt", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_PROMPT", ">> ")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if got := m.filterModels[0].textinput.Prompt; got != ">> " {
+			t.Errorf("textinput.Prompt = %q, want %q", got, ">> ")
+		}
+	})
+
+	t.Run("GUM_FILTER_HEADER sets filterModel header", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_HEADER", "Vyber si")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if got := m.filterModels[0].header; got != "Vyber si" {
+			t.Errorf("filterModel.header = %q, want %q", got, "Vyber si")
+		}
+	})
+
+	t.Run("GUM_FILTER_INDICATOR sets filterModel indicator", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_INDICATOR", "→")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if got := m.filterModels[0].indicator; got != "→" {
+			t.Errorf("filterModel.indicator = %q, want %q", got, "→")
+		}
+	})
+
+	t.Run("GUM_FILTER_FUZZY=false disables fuzzy", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_FUZZY", "false")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if m.filterModels[0].fuzzy {
+			t.Error("filterModel.fuzzy should be false when GUM_FILTER_FUZZY=false")
+		}
+	})
+
+	t.Run("GUM_FILTER_SELECTED_PREFIX sets selectedPrefix", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_SELECTED_PREFIX", "[x] ")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if got := m.filterModels[0].selectedPrefix; got != "[x] " {
+			t.Errorf("filterModel.selectedPrefix = %q, want %q", got, "[x] ")
+		}
+	})
+
+	t.Run("GUM_FILTER_UNSELECTED_PREFIX sets unselectedPrefix", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_UNSELECTED_PREFIX", "[ ] ")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if got := m.filterModels[0].unselectedPrefix; got != "[ ] " {
+			t.Errorf("filterModel.unselectedPrefix = %q, want %q", got, "[ ] ")
+		}
+	})
+
+	t.Run("GUM_CHOOSE_HEADER sets chooseModel header", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_HEADER", "Vyber ovoce")
+		copts, _ := parseChooseBlock([]string{"apple", "banana"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelChoose, ChooseOpts: copts}}, defaultOpts)
+		if got := m.chooseModels[0].header; got != "Vyber ovoce" {
+			t.Errorf("chooseModel.header = %q, want %q", got, "Vyber ovoce")
+		}
+	})
+
+	t.Run("GUM_CHOOSE_CURSOR sets chooseModel cursor", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_CURSOR", "→ ")
+		copts, _ := parseChooseBlock([]string{"apple", "banana"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelChoose, ChooseOpts: copts}}, defaultOpts)
+		if got := m.chooseModels[0].cursor; got != "→ " {
+			t.Errorf("chooseModel.cursor = %q, want %q", got, "→ ")
+		}
+	})
+
+	t.Run("GUM_CHOOSE_SELECTED_PREFIX sets chooseModel selectedPrefix", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_SELECTED_PREFIX", "✓ ")
+		copts, _ := parseChooseBlock([]string{"apple", "banana"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelChoose, ChooseOpts: copts}}, defaultOpts)
+		if got := m.chooseModels[0].selectedPrefix; got != "✓ " {
+			t.Errorf("chooseModel.selectedPrefix = %q, want %q", got, "✓ ")
+		}
+	})
+
+	t.Run("GUM_CHOOSE_UNSELECTED_PREFIX sets chooseModel unselectedPrefix", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_UNSELECTED_PREFIX", "○ ")
+		copts, _ := parseChooseBlock([]string{"apple", "banana"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelChoose, ChooseOpts: copts}}, defaultOpts)
+		if got := m.chooseModels[0].unselectedPrefix; got != "○ " {
+			t.Errorf("chooseModel.unselectedPrefix = %q, want %q", got, "○ ")
+		}
+	})
+
+	t.Run("per-panel env vars independent per panel", func(t *testing.T) {
+		// Both GUM_FILTER_* and GUM_CHOOSE_* set simultaneously
+		t.Setenv("GUM_FILTER_PLACEHOLDER", "Filter here")
+		t.Setenv("GUM_CHOOSE_HEADER", "Pick one")
+		fopts, _ := parseFilterBlock([]string{"x", "y"})
+		copts, _ := parseChooseBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{
+			{Type: PanelFilter, FilterOpts: fopts},
+			{Type: PanelChoose, ChooseOpts: copts},
+		}, defaultOpts)
+		if got := m.filterModels[0].textinput.Placeholder; got != "Filter here" {
+			t.Errorf("filter placeholder = %q, want %q", got, "Filter here")
+		}
+		if got := m.chooseModels[0].header; got != "Pick one" {
+			t.Errorf("choose header = %q, want %q", got, "Pick one")
+		}
+	})
+
+	t.Run("explicit per-panel flag overrides env var in model", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_PLACEHOLDER", "from env")
+		fopts, _ := parseFilterBlock([]string{"--placeholder", "from flag", "a"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		if got := m.filterModels[0].textinput.Placeholder; got != "from flag" {
+			t.Errorf("explicit flag should override env var, got %q", got)
+		}
+	})
+}
+
+// TestPerPanelEnvVarsReflectedInView verifies that select per-panel env vars
+// are visible in the rendered output (not just stored in model fields).
+func TestPerPanelEnvVarsReflectedInView(t *testing.T) {
+	defaultOpts := Options{Height: 10, Border: "single"}
+
+	t.Run("GUM_FILTER_HEADER visible in filter view", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_HEADER", "MujFilter")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		m.borderStyle = lipgloss.NewStyle()
+		view := m.View()
+		if !strings.Contains(view, "MujFilter") {
+			t.Errorf("filter header 'MujFilter' not in view:\n%s", view)
+		}
+	})
+
+	t.Run("GUM_CHOOSE_HEADER visible in choose view", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_HEADER", "MujChoose")
+		copts, _ := parseChooseBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelChoose, ChooseOpts: copts}}, defaultOpts)
+		m.borderStyle = lipgloss.NewStyle()
+		view := m.View()
+		if !strings.Contains(view, "MujChoose") {
+			t.Errorf("choose header 'MujChoose' not in view:\n%s", view)
+		}
+	})
+
+	t.Run("GUM_FILTER_PROMPT visible in filter view", func(t *testing.T) {
+		t.Setenv("GUM_FILTER_PROMPT", "??> ")
+		fopts, _ := parseFilterBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelFilter, FilterOpts: fopts}}, defaultOpts)
+		m.borderStyle = lipgloss.NewStyle()
+		view := m.View()
+		if !strings.Contains(view, "??> ") {
+			t.Errorf("filter prompt '??> ' not in view:\n%s", view)
+		}
+	})
+
+	t.Run("GUM_CHOOSE_CURSOR visible in choose view", func(t *testing.T) {
+		t.Setenv("GUM_CHOOSE_CURSOR", "==> ")
+		copts, _ := parseChooseBlock([]string{"a", "b"})
+		m := makeOrchestrator(t, []Panel{{Type: PanelChoose, ChooseOpts: copts}}, defaultOpts)
+		m.borderStyle = lipgloss.NewStyle()
+		view := m.View()
+		if !strings.Contains(view, "==> ") {
+			t.Errorf("choose cursor '==> ' not in view:\n%s", view)
+		}
+	})
+}
