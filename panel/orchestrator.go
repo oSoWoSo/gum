@@ -1032,13 +1032,13 @@ func (m orchestrator) View() string {
 		}
 		headerView := m.headerStyle.Render(" " + panelHeader + " ")
 		if i == m.activeIdx {
-			headerView = " ● " + headerView
+			headerView = m.activeBorderStyle.Render("●") + " " + headerView
 		}
 
 		panelView := panelBorder.Render(
 			lipgloss.JoinVertical(
 				lipgloss.Left,
-				lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Render(headerView),
+				headerView,
 				view,
 			),
 		)
