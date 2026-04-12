@@ -6,11 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alecthomas/kong"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/paginator"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -1626,6 +1628,142 @@ func TestParseFilterBlock(t *testing.T) {
 		}
 		if opts.Strict {
 			t.Error("expected Strict=false")
+		}
+	})
+}
+
+// newOptionsParser creates a kong parser for Options (for testing env var binding).
+func newOptionsParser(o *Options) (*kong.Kong, error) {
+	return kong.New(o, kong.Exit(func(int) {}), kong.Vars{
+		"version":                 "test",
+		"versionNumber":           "test",
+		"defaultHeight":           "0",
+		"defaultWidth":            "0",
+		"defaultAlign":            "left",
+		"defaultBorder":           "none",
+		"defaultBorderForeground": "",
+		"defaultBorderBackground": "",
+		"defaultBackground":       "",
+		"defaultForeground":       "",
+		"defaultMargin":           "0 0",
+		"defaultPadding":          "0 0",
+		"defaultUnderline":        "false",
+		"defaultBold":             "false",
+		"defaultFaint":            "false",
+		"defaultItalic":           "false",
+		"defaultStrikethrough":    "false",
+	})
+}
+
+// TestAllGlobalEnvVarsRespected verifies every GUM_PANEL_* env var is read by
+// the Options struct. If a test fails the env var is declared but never bound.
+func TestAllGlobalEnvVarsRespected(t *testing.T) {
+	cases := []struct {
+		env      string
+		describe string
+		check    func(o Options) bool
+	}{
+		{"GUM_PANEL_GAP=3", "Gap", func(o Options) bool { return o.Gap == 3 }},
+		{"GUM_PANEL_HEIGHT=15", "Height", func(o Options) bool { return o.Height == 15 }},
+		{"GUM_PANEL_BORDER=double", "Border", func(o Options) bool { return o.Border == "double" }},
+		{"GUM_PANEL_VERTICAL=true", "Vertical", func(o Options) bool { return o.Vertical }},
+		{"GUM_PANEL_STACKED=false", "Stacked", func(o Options) bool { return !o.Stacked }},
+		{"GUM_PANEL_DELIMITER=|||", "Delimiter", func(o Options) bool { return o.Delimiter == "|||" }},
+		{"GUM_PANEL_OUTPUT_DELIMITER=,", "OutputDelimiter", func(o Options) bool { return o.OutputDelimiter == "," }},
+		{"GUM_PANEL_SINGLE=true", "Single", func(o Options) bool { return o.Single }},
+		{"GUM_PANEL_ALL=true", "All", func(o Options) bool { return o.All }},
+		{"GUM_PANEL_ACTIVE=1", "Active", func(o Options) bool { return o.Active == 1 }},
+		{"GUM_PANEL_SHOW_HELP=false", "ShowHelp", func(o Options) bool { return !o.ShowHelp }},
+		{"GUM_PANEL_ACTIVE_BORDER_FOREGROUND=196", "ActiveBorderStyle.Foreground", func(o Options) bool { return o.ActiveBorderStyle.Foreground == "196" }},
+		{"GUM_PANEL_ACTIVE_BORDER_BACKGROUND=1", "ActiveBorderStyle.Background", func(o Options) bool { return o.ActiveBorderStyle.Background == "1" }},
+		{"GUM_PANEL_INACTIVE_BORDER_FOREGROUND=33", "InactiveBorderStyle.Foreground", func(o Options) bool { return o.InactiveBorderStyle.Foreground == "33" }},
+		{"GUM_PANEL_INACTIVE_BORDER_BACKGROUND=0", "InactiveBorderStyle.Background", func(o Options) bool { return o.InactiveBorderStyle.Background == "0" }},
+		{"GUM_PANEL_ACTIVE_INDICATOR_FOREGROUND=82", "ActiveIndicatorStyle.Foreground", func(o Options) bool { return o.ActiveIndicatorStyle.Foreground == "82" }},
+		{"GUM_PANEL_HEADER_FOREGROUND=99", "HeaderStyle.Foreground", func(o Options) bool { return o.HeaderStyle.Foreground == "99" }},
+		{"GUM_PANEL_CURSOR_FOREGROUND=212", "CursorStyle.Foreground", func(o Options) bool { return o.CursorStyle.Foreground == "212" }},
+		{"GUM_PANEL_ITEM_FOREGROUND=240", "ItemStyle.Foreground", func(o Options) bool { return o.ItemStyle.Foreground == "240" }},
+		{"GUM_PANEL_SELECTED_FOREGROUND=46", "SelectedItemStyle.Foreground", func(o Options) bool { return o.SelectedItemStyle.Foreground == "46" }},
+		{"GUM_PANEL_MATCH_FOREGROUND=11", "MatchStyle.Foreground", func(o Options) bool { return o.MatchStyle.Foreground == "11" }},
+		{"GUM_PANEL_INDICATOR_FOREGROUND=10", "IndicatorStyle.Foreground", func(o Options) bool { return o.IndicatorStyle.Foreground == "10" }},
+		{"GUM_PANEL_SELECTED_PREFIX_FOREGROUND=9", "SelectedPrefixStyle.Foreground", func(o Options) bool { return o.SelectedPrefixStyle.Foreground == "9" }},
+		{"GUM_PANEL_UNSELECTED_PREFIX_FOREGROUND=8", "UnselectedPrefixStyle.Foreground", func(o Options) bool { return o.UnselectedPrefixStyle.Foreground == "8" }},
+		{"GUM_PANEL_PROMPT_FOREGROUND=7", "PromptStyle.Foreground", func(o Options) bool { return o.PromptStyle.Foreground == "7" }},
+		{"GUM_PANEL_PLACEHOLDER_FOREGROUND=6", "PlaceholderStyle.Foreground", func(o Options) bool { return o.PlaceholderStyle.Foreground == "6" }},
+		{"GUM_PANEL_TEXT_FOREGROUND=5", "TextStyle.Foreground", func(o Options) bool { return o.TextStyle.Foreground == "5" }},
+		{"GUM_PANEL_CURSOR_TEXT_FOREGROUND=4", "CursorTextStyle.Foreground", func(o Options) bool { return o.CursorTextStyle.Foreground == "4" }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.describe, func(t *testing.T) {
+			parts := strings.SplitN(tc.env, "=", 2)
+			t.Setenv(parts[0], parts[1])
+
+			var o Options
+			parser, err := newOptionsParser(&o)
+			if err != nil {
+				t.Fatalf("create parser: %v", err)
+			}
+			if _, err := parser.Parse([]string{"dummy"}); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if !tc.check(o) {
+				t.Errorf("env var %s not reflected in Options", tc.env)
+			}
+		})
+	}
+}
+
+// TestBorderStylesAppliedInView verifies that activeBorderStyle and
+// inactiveBorderStyle foreground colors are actually used in View rendering,
+// not hardcoded values.
+func TestBorderStylesAppliedInView(t *testing.T) {
+	// Force ANSI color rendering in test environment (no real terminal).
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+
+	newOrch := func(activeColor, inactiveColor string) orchestrator {
+		cm0 := newMockChooseModel([]string{"a"}, 5)
+		cm1 := newMockChooseModel([]string{"b"}, 5)
+		return orchestrator{
+			panels: []Panel{
+				{Type: PanelChoose, ModelIdx: 0},
+				{Type: PanelChoose, ModelIdx: 1},
+			},
+			chooseModels:         []chooseModel{*cm0, *cm1},
+			activeIdx:            0,
+			borderStyle:          lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()),
+			activeBorderStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color(activeColor)),
+			inactiveBorderStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color(inactiveColor)),
+			activeIndicatorStyle: lipgloss.NewStyle(),
+			headerStyle:          lipgloss.NewStyle(),
+		}
+	}
+
+	t.Run("active border uses activeBorderStyle foreground", func(t *testing.T) {
+		o := newOrch("196", "240")
+		view := o.View()
+		if !strings.Contains(view, "\x1b[38;5;196m") {
+			t.Errorf("active border color 196 not found in rendered view")
+		}
+	})
+
+	t.Run("inactive border uses inactiveBorderStyle foreground", func(t *testing.T) {
+		o := newOrch("212", "33")
+		view := o.View()
+		if !strings.Contains(view, "\x1b[38;5;33m") {
+			t.Errorf("inactive border color 33 not found in rendered view")
+		}
+	})
+
+	t.Run("hardcoded 240 not used when inactiveBorderStyle set to different color", func(t *testing.T) {
+		o := newOrch("212", "196")
+		view := o.View()
+		// color 240 should NOT appear — it was the old hardcoded value
+		if strings.Contains(view, "\x1b[38;5;240m") {
+			t.Errorf("hardcoded color 240 found in view — inactiveBorderStyle is not being used")
+		}
+		if !strings.Contains(view, "\x1b[38;5;196m") {
+			t.Errorf("inactive border color 196 not found in rendered view")
 		}
 	})
 }

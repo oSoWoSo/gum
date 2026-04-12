@@ -998,10 +998,13 @@ func (m orchestrator) View() string {
 	var panelViews []string
 
 	for i, panel := range m.panels {
-		panelBorder := m.borderStyle
+		borderColorStyle := m.activeBorderStyle
 		if i != m.activeIdx {
-			panelBorder = panelBorder.BorderForeground(lipgloss.Color("240"))
+			borderColorStyle = m.inactiveBorderStyle
 		}
+		panelBorder := m.borderStyle.
+			BorderForeground(borderColorStyle.GetForeground()).
+			BorderBackground(borderColorStyle.GetBackground())
 
 		var view string
 
