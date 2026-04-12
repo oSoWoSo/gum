@@ -45,6 +45,9 @@ func (o Options) Run() error {
 		activeBorderStyle:   o.ActiveBorderStyle.ToLipgloss(),
 		inactiveBorderStyle: o.InactiveBorderStyle.ToLipgloss(),
 
+		// Active panel indicator (●)
+		activeIndicatorStyle: o.ActiveIndicatorStyle.ToLipgloss(),
+
 		// Common styles
 		matchStyle:        o.MatchStyle.ToLipgloss(),
 		cursorStyle:       o.CursorStyle.ToLipgloss(),

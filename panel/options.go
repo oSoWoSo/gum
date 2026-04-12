@@ -53,6 +53,9 @@ type Options struct {
 	ActiveBorderStyle   style.Styles `embed:"" prefix:"active-border." set:"defaultForeground=212" envprefix:"GUM_PANEL_ACTIVE_BORDER_" group:"Style Flags"`
 	InactiveBorderStyle style.Styles `embed:"" prefix:"inactive-border." set:"defaultForeground=240" envprefix:"GUM_PANEL_INACTIVE_BORDER_" group:"Style Flags"`
 
+	// Active panel indicator (●) style
+	ActiveIndicatorStyle style.Styles `embed:"" prefix:"active-indicator." set:"defaultForeground=212" envprefix:"GUM_PANEL_ACTIVE_INDICATOR_" group:"Style Flags"`
+
 	// Common styles (global — apply to all panels)
 	CursorStyle         style.Styles `embed:"" prefix:"cursor." set:"defaultForeground=212" envprefix:"GUM_PANEL_CURSOR_" group:"Style Flags"`
 	HeaderStyle         style.Styles `embed:"" prefix:"header." set:"defaultForeground=99" envprefix:"GUM_PANEL_HEADER_" group:"Style Flags"`

@@ -34,6 +34,9 @@ type orchestrator struct {
 	activeBorderStyle   lipgloss.Style
 	inactiveBorderStyle lipgloss.Style
 
+	// Active panel indicator (●)
+	activeIndicatorStyle lipgloss.Style
+
 	// Common styles
 	matchStyle        lipgloss.Style
 	cursorStyle       lipgloss.Style
@@ -1032,7 +1035,7 @@ func (m orchestrator) View() string {
 		}
 		headerView := m.headerStyle.Render(" " + panelHeader + " ")
 		if i == m.activeIdx {
-			headerView = m.activeBorderStyle.Render("●") + " " + headerView
+			headerView = m.activeIndicatorStyle.Render("●") + " " + headerView
 		}
 
 		panelView := panelBorder.Render(
